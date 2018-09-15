@@ -356,6 +356,20 @@ cmd_unmount(int nargs, char **args)
 }
 
 /*
+ * Command for enabling debug thread.
+ */
+static
+int
+cmd_dth(int nargs, char **args)
+{
+    (void)nargs;
+    (void)args;
+
+    dbflags = DB_THREADS;
+    return 0;
+}
+
+/*
  * Command to set the "boot fs". 
  *
  * The boot filesystem is the one that pathnames like /bin/sh with
@@ -430,7 +444,8 @@ static const char *opsmenu[] = {
 	"[p]       Other program             ",
 	"[mount]   Mount a filesystem        ",
 	"[unmount] Unmount a filesystem      ",
-	"[bootfs]  Set \"boot\" filesystem     ",
+    "[dth]     Enable debug thread       ",
+	"[bootfs]  Set \"boot\" filesystem   ",
 	"[pf]      Print a file              ",
 	"[cd]      Change directory          ",
 	"[pwd]     Print current directory   ",
@@ -540,6 +555,7 @@ static struct {
 	{ "p",		cmd_prog },
 	{ "mount",	cmd_mount },
 	{ "unmount",	cmd_unmount },
+    { "dth",    cmd_dth },
 	{ "bootfs",	cmd_bootfs },
 	{ "pf",		printfile },
 	{ "cd",		cmd_chdir },

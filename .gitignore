@@ -10,3 +10,7 @@
 */defs.mk
 install.sh
 build-and-run-kernel.sh
+
+# CLion
+os161-1.99/.idea/
+os161-1.99/cmake-build-debug/
