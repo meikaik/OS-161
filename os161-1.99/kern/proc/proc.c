@@ -49,7 +49,9 @@
 #include <vnode.h>
 #include <vfs.h>
 #include <synch.h>
-#include <kern/fcntl.h>  
+#include <kern/fcntl.h>
+#include <limits.h>
+#include "opt-A2.h"
 
 /*
  * The process for the kernel; this holds all the kernel-only threads.
@@ -69,7 +71,26 @@ static struct semaphore *proc_count_mutex;
 struct semaphore *no_proc_sem;   
 #endif  // UW
 
+#if OPT_A2
 
+// Init global PID counter
+pid_t global_pid = PID_MIN - 1;
+
+#endif
+
+/*
+ * Get a process by PID from the Process Array
+ */
+struct proc_attr* getproc(pid_t pid) {
+  unsigned int len = array_num(process_arr);
+  for(unsigned int i = 0; i < len; i++) {
+	struct proc_attr *cur = array_get(process_arr, i);
+	if(cur->pid == pid){
+	  return cur;
+	}
+  }
+  return NULL;
+}
 
 /*
  * Create a proc structure.
@@ -207,7 +228,19 @@ proc_bootstrap(void)
   if (no_proc_sem == NULL) {
     panic("could not create no_proc_sem semaphore\n");
   }
-#endif // UW 
+#endif // UW
+
+#if OPT_A2
+  pid_lock = lock_create("PID lock");
+  process_arr_lock = lock_create("Process arr lock");
+  wait_cv = cv_create("wait CV");
+
+  if (pid_lock == NULL || wait_cv == NULL){
+  	panic("ERR creating pid_lock / wait_cv");
+  }
+
+  process_arr = array_create();
+#endif
 }
 
 /*
@@ -226,6 +259,18 @@ proc_create_runprogram(const char *name)
 	if (proc == NULL) {
 		return NULL;
 	}
+
+#if OPT_A2
+    lock_acquire(pid_lock);
+    proc->pid = global_pid++;
+    lock_release(pid_lock);
+
+    struct proc_attr *proc_attr_entry = kmalloc(sizeof(struct proc_attr));
+    proc_attr_entry->pid = proc->pid;
+    proc_attr_entry->ppid = -1;
+    proc_attr_entry->exitcode = 0;
+    proc_attr_entry->state = RUNNING;
+#endif
 
 #ifdef UW
 	/* open the console - this should always succeed */
@@ -270,6 +315,12 @@ proc_create_runprogram(const char *name)
 	proc_count++;
 	V(proc_count_mutex);
 #endif // UW
+
+#if OPT_A2
+    lock_acquire(process_arr_lock);
+	array_add(process_arr, proc_attr_entry, NULL);
+	lock_release(process_arr_lock);
+#endif
 
 	return proc;
 }
@@ -364,3 +415,4 @@ curproc_setas(struct addrspace *newas)
 	spinlock_release(&proc->p_lock);
 	return oldas;
 }
+

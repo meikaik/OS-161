@@ -3,12 +3,80 @@
 #include <kern/unistd.h>
 #include <kern/wait.h>
 #include <lib.h>
+#include <mips/trapframe.h>
 #include <syscall.h>
 #include <current.h>
 #include <proc.h>
 #include <thread.h>
 #include <addrspace.h>
 #include <copyinout.h>
+#include <synch.h>
+#include <array.h>
+#include "opt-A2.h"
+
+
+
+
+
+#if OPT_A2
+
+int sys_fork(struct trapframe *tf, pid_t *retval) {
+
+  // Create process structure for child process
+  struct proc *child = proc_create_runprogram(curproc->p_name);
+
+  // Create parent child relationship
+  lock_acquire(process_arr_lock);
+  struct proc_attr *childd = getproc(child->pid);
+  lock_release(process_arr_lock);
+  childd->ppid = curproc->pid;
+
+
+  // Check for proc_create_runprogram failure
+  if (child == NULL) {
+    DEBUG(DB_SYSCALL, "ERR sys_fork - creating child process: proc_create_runprogram(curproc->p_name) \n");
+    return ENPROC;
+  }
+
+  // Create and copy address space to child
+  int error = as_copy(curproc_getas(), &(child->p_addrspace));
+
+  // Check for as_copy failure and destroy during error
+  if (error != 0) {
+      DEBUG(DB_SYSCALL, "ERR sys_fork - copy child process address space: as_copy(curproc_getas(), &(child->p_addrspace)) \n");
+      proc_destroy(child);
+      return ENOMEM;
+  }
+
+  // Create trapframe
+  struct trapframe *new_tf = kmalloc(sizeof(struct trapframe));
+
+  // Check for trapframe create failure
+  if (new_tf == NULL) {
+    DEBUG(DB_SYSCALL, "ERR new trapframe for child \n");
+    proc_destroy(child);
+    return ENOMEM;
+  }
+
+  memcpy(new_tf, tf, sizeof(struct trapframe));
+
+  // Create thread for child process
+  error = thread_fork(curthread->t_name, child, &enter_forked_process, new_tf, 0);
+
+  // Check for thread fork error
+  if (error != 0){
+    proc_destroy(child);
+    kfree(tf);
+    return ENOTSUP; // revisit this error code
+  }
+
+  *retval = child->pid;
+
+  DEBUG(DB_SYSCALL, "SUCCESS sys_fork \n");
+  return(0);
+}
+
+#endif
 
   /* this implementation of sys__exit does not do anything with the exit code */
   /* this needs to be fixed to get exit() and waitpid() working properly */
@@ -17,11 +85,35 @@ void sys__exit(int exitcode) {
 
   struct addrspace *as;
   struct proc *p = curproc;
-  /* for now, just include this to keep the compiler from complaining about
-     an unused variable */
-  (void)exitcode;
 
   DEBUG(DB_SYSCALL,"Syscall: _exit(%d)\n",exitcode);
+
+#if OPT_A2
+  lock_acquire(process_arr_lock);
+
+  struct proc_attr *child = getproc(curproc->pid);
+
+  if (child->ppid != -1) {
+    child->exitcode = _MKWAIT_EXIT(exitcode);
+    child->state = ZOMBIE;
+    cv_broadcast(wait_cv, process_arr_lock);
+  } else {
+    child->state = EXITED;
+  }
+
+  unsigned int len = array_num(process_arr);
+  for(unsigned int i = 0; i < len; i++) {
+	struct proc_attr *cur = array_get(process_arr, i);
+	// if we found a process match in the arr && the process is a zombie
+	if(child->pid == cur->ppid && ZOMBIE == cur->state ) {
+	  cur->ppid = -1;
+	  cur->state = EXITED;
+	}
+  }
+  lock_release(process_arr_lock);
+#endif
+
+
 
   KASSERT(curproc->p_addrspace != NULL);
   as_deactivate();
@@ -53,10 +145,8 @@ void sys__exit(int exitcode) {
 int
 sys_getpid(pid_t *retval)
 {
-  /* for now, this is just a stub that always returns a PID of 1 */
-  /* you need to fix this to make it work properly */
-  *retval = 1;
-  return(0);
+    *retval = curproc->pid;
+    return(0);
 }
 
 /* stub handler for waitpid() system call                */
@@ -68,22 +158,40 @@ sys_waitpid(pid_t pid,
 	    pid_t *retval)
 {
   int exitstatus;
-  int result;
-
-  /* this is just a stub implementation that always reports an
-     exit status of 0, regardless of the actual exit status of
-     the specified process.   
-     In fact, this will return 0 even if the specified process
-     is still running, and even if it never existed in the first place.
-
-     Fix this!
-  */
+  int result = 0;
 
   if (options != 0) {
-    return(EINVAL);
+    return EINVAL;
   }
-  /* for now, just pretend the exitstatus is 0 */
-  exitstatus = 0;
+
+#if OPT_A2
+
+  lock_acquire(process_arr_lock);
+  struct proc_attr *child = getproc(pid);
+
+  if (child == NULL){
+    lock_release(process_arr_lock);
+    return ESRCH;
+  }
+  else if (curproc->pid != child->ppid) {
+    lock_release(process_arr_lock);
+    return ECHILD;
+  }
+
+
+  // Wait if child is alive
+  while(child->state == RUNNING) {
+    cv_wait(wait_cv, process_arr_lock);
+  }
+
+  exitstatus = child->exitcode;
+
+  lock_release(process_arr_lock);
+#endif
+//  Previous stubbed exitstatus code:
+//  for now, just pretend the exitstatus is 0
+//  exitstatus = 0;
+
   result = copyout((void *)&exitstatus,status,sizeof(int));
   if (result) {
     return(result);
