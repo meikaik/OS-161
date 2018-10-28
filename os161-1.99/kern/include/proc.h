@@ -53,13 +53,6 @@ struct cv;
 
 enum states { RUNNING, EXITED, ZOMBIE };
 
-struct proc_attr {
-  pid_t pid;
-  pid_t ppid;
-  enum states state;
-  int exitcode;
-};
-
 #endif
 
 /*
@@ -89,6 +82,9 @@ struct proc {
 
 #if OPT_A2
   pid_t pid;
+  pid_t ppid;
+  enum states state;
+  int exitcode;
 #endif
 };
 
@@ -108,7 +104,7 @@ struct lock *process_arr_lock;
 struct cv *wait_cv;
 struct array *process_arr;
 
-struct proc_attr* getproc(pid_t pid);
+struct proc* getproc(pid_t pid);
 #endif
 /* Call once during system startup to allocate data structures. */
 void proc_bootstrap(void);

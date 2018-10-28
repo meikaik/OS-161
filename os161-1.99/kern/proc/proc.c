@@ -265,11 +265,9 @@ proc_create_runprogram(const char *name)
     proc->pid = global_pid++;
     lock_release(pid_lock);
 
-    struct proc_attr *proc_attr_entry = kmalloc(sizeof(struct proc_attr));
-    proc_attr_entry->pid = proc->pid;
-    proc_attr_entry->ppid = -1;
-    proc_attr_entry->exitcode = 0;
-    proc_attr_entry->state = RUNNING;
+    proc->ppid = -1;
+    proc->exitcode = 0;
+    proc->state = RUNNING;
 #endif
 
 #ifdef UW
@@ -318,7 +316,7 @@ proc_create_runprogram(const char *name)
 
 #if OPT_A2
     lock_acquire(process_arr_lock);
-	array_add(process_arr, proc_attr_entry, NULL);
+	array_add(process_arr, proc, NULL);
 	lock_release(process_arr_lock);
 #endif
 

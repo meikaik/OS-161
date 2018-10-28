@@ -27,7 +27,8 @@ int sys_fork(struct trapframe *tf, pid_t *retval) {
 
   // Create parent child relationship
   lock_acquire(process_arr_lock);
-  struct proc_attr *childd = getproc(child->pid);
+  struct proc *childd = getproc(child->pid);
+  childd->ppid = curproc->pid;
   lock_release(process_arr_lock);
   childd->ppid = curproc->pid;
 
@@ -91,7 +92,7 @@ void sys__exit(int exitcode) {
 #if OPT_A2
   lock_acquire(process_arr_lock);
 
-  struct proc_attr *child = getproc(curproc->pid);
+  struct proc *child = getproc(curproc->pid);
 
   if (child->ppid != -1) {
     child->exitcode = _MKWAIT_EXIT(exitcode);
@@ -103,7 +104,8 @@ void sys__exit(int exitcode) {
 
   unsigned int len = array_num(process_arr);
   for(unsigned int i = 0; i < len; i++) {
-	struct proc_attr *cur = array_get(process_arr, i);
+
+	struct proc *cur = array_get(process_arr, i);
 	// if we found a process match in the arr && the process is a zombie
 	if(child->pid == cur->ppid && ZOMBIE == cur->state ) {
 	  cur->ppid = -1;
@@ -167,7 +169,7 @@ sys_waitpid(pid_t pid,
 #if OPT_A2
 
   lock_acquire(process_arr_lock);
-  struct proc_attr *child = getproc(pid);
+  struct proc *child = getproc(pid);
 
   if (child == NULL){
     lock_release(process_arr_lock);
