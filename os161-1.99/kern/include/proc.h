@@ -30,6 +30,8 @@
 #ifndef _PROC_H_
 #define _PROC_H_
 
+#include "opt-A2.h"
+
 /*
  * Definition of a process.
  *
@@ -44,6 +46,21 @@ struct vnode;
 #ifdef UW
 struct semaphore;
 #endif // UW
+
+#if OPT_A2
+struct lock;
+struct cv;
+
+enum states { RUNNING, EXITED, ZOMBIE };
+
+struct proc_attr {
+  pid_t pid;
+  pid_t ppid;
+  enum states state;
+  int exitcode;
+};
+
+#endif
 
 /*
  * Process structure.
@@ -69,6 +86,10 @@ struct proc {
 #endif
 
 	/* add more material here as needed */
+
+#if OPT_A2
+  pid_t pid;
+#endif
 };
 
 /* This is the process structure for the kernel and for kernel-only threads. */
@@ -79,6 +100,16 @@ extern struct proc *kproc;
 extern struct semaphore *no_proc_sem;
 #endif // UW
 
+// Additional externs for A2
+#if OPT_A2
+pid_t global_pid;
+struct lock *pid_lock;
+struct lock *process_arr_lock;
+struct cv *wait_cv;
+struct array *process_arr;
+
+struct proc_attr* getproc(pid_t pid);
+#endif
 /* Call once during system startup to allocate data structures. */
 void proc_bootstrap(void);
 
