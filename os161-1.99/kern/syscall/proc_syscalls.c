@@ -83,16 +83,51 @@ int sys_execv(char *progname, char **args) {
     return EFAULT;
   }
 
-  (void) args; // prevent warning for now
-
-  struct addrspace *old; // added this
+  struct addrspace *old = curproc->p_addrspace;
   struct addrspace *as;
   struct vnode *v;
   vaddr_t entrypoint, stackptr;
   int result;
+  unsigned int nargs = 0;
+
+  /* Count arguments */
+  while (args[nargs] != NULL) {
+    int argsize = strlen(args[nargs]);
+    if (argsize > 1024 || (nargs + 1) >= 32) {
+      return E2BIG;
+    }
+    nargs++;
+  }
+
+  /* Copy progname to newprog */
+  int proglen = strlen(progname) + 1;
+  char *newprog = kmalloc(sizeof(char *) *proglen);
+  if (newprog == NULL) {
+    return ENOMEM;
+  }
+  result = copyinstr((userptr_t)progname, newprog, proglen, NULL);
+  if (result) {
+    return result;
+  }
+
+  /* Copy args to kernel */
+  char **kernelargs = kmalloc(sizeof(char **) * (nargs + 1));
+  for (unsigned int i = 0; i < nargs; i++) {
+    int len = strlen(args[i]) + 1; // Add 1 for null terminator
+    // Allocate the appropriate size for each argument
+    kernelargs[i] = kmalloc(sizeof(char *) *len);
+    // Copy args[i] to kernelargs[i]
+    result = copyinstr((userptr_t)args[i], kernelargs[i], len, NULL);
+
+    if (result) {
+      return result;
+    }
+  }
+  // Terminate with null char
+  kernelargs[nargs] = NULL;
 
   /* Open the file. */
-  result = vfs_open(progname, O_RDONLY, 0, &v);
+  result = vfs_open(newprog, O_RDONLY, 0, &v);
   if (result) {
     return result;
   }
@@ -128,8 +163,35 @@ int sys_execv(char *progname, char **args) {
     return result;
   }
 
+  // ensure that stack pointer is 8-byte aligned
+  while(stackptr % 8 != 0) {
+    stackptr--;
+  }
+
+  /* copy args to user stack via stack pointer table */
+  vaddr_t argpointers[nargs + 1];
+  for (int i = nargs - 1; i >= 0; i--) {
+    stackptr -= ROUNDUP( strlen(kernelargs[i]) + 1 * sizeof(char *), 8);
+    result = copyoutstr(kernelargs[i], (userptr_t)stackptr, strlen(kernelargs[i]) + 1, NULL);
+    if (result) {
+      return result;
+    }
+    argpointers[i] = stackptr;
+  }
+  argpointers[nargs] = 0;
+
+  // Align stack pointer again
+  while(stackptr % 8 != 0) {
+    stackptr--;
+  }
+
+  stackptr -= sizeof(vaddr_t) * (nargs + 1);
+  copyout(argpointers, (userptr_t)stackptr, sizeof(vaddr_t) * (nargs + 1));
+
+  as_destroy(old);
+
   /* Warp to user mode. */
-  enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/, stackptr, entrypoint);
+  enter_new_process(nargs, (userptr_t)stackptr, stackptr, entrypoint);
 
   /* enter_new_process does not return. */
   panic("enter_new_process returned\n");
