@@ -37,6 +37,7 @@
 #include <mips/tlb.h>
 #include <addrspace.h>
 #include <vm.h>
+#include <opt-A3.h>
 
 /*
  * Dumb MIPS-only "VM system" that is intended to only be just barely
@@ -51,24 +52,103 @@
  */
 static struct spinlock stealmem_lock = SPINLOCK_INITIALIZER;
 
+struct coremap {
+    paddr_t address;
+    bool unused;
+    bool contiguous;
+};
+
+struct coremap* coremap;
+
+unsigned int frames;
+
 void
 vm_bootstrap(void)
 {
-	/* Do nothing. */
+	paddr_t l;
+    paddr_t h;
+    ram_getsize(&l, &h);
+
+    coremap = (struct coremap *) PADDR_TO_KVADDR(l);
+    frames = (h - l) / PAGE_SIZE;
+    l += frames * sizeof(struct coremap);
+
+    while (l % PAGE_SIZE) {
+        l++;
+    }
+
+    frames = (h - l) / PAGE_SIZE;
+
+    paddr_t tmp = l;
+
+    for(unsigned int i = 0; i < frames; i++) {
+        coremap[i].address = tmp;
+        coremap[i].unused = true;
+        coremap[i].contiguous = false;
+        tmp += PAGE_SIZE;
+    }
+
+
 }
 
 static
 paddr_t
 getppages(unsigned long npages)
 {
-	paddr_t addr;
+	paddr_t address;
 
 	spinlock_acquire(&stealmem_lock);
 
-	addr = ram_stealmem(npages);
-	
-	spinlock_release(&stealmem_lock);
-	return addr;
+    if (coremap) {
+        int start = 0;
+        int pages = (int) npages;
+        bool contiguous = false;
+        for (unsigned int i = 0; i < frames; i++) {
+            if (contiguous) {
+                break;
+            }
+            if (coremap[i].unused) {
+                int curr_size = 1;
+                if (pages <= 1) {
+                    start = i;
+                    contiguous = true;
+                } else {
+                    for (unsigned int j = i + 1; j < i + pages; j++) {
+                        if (coremap[j].unused) {
+                            if (++curr_size == pages) {
+                                contiguous = true;
+                                start = i;
+                                break;
+                            }
+                        }
+                        else {
+                            i += curr_size;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (contiguous) {
+            for (int i = 0; i < pages; i++) {
+                coremap[start + i].contiguous = (i + 1) != pages;
+				coremap[start + i].unused = false;
+			}
+            address = coremap[start].address;
+        }
+        else {
+            spinlock_release(&stealmem_lock);
+            kprintf("Error: no memory allocating frames");
+            return 0;
+        }
+    }
+    else {
+        address = ram_stealmem(npages);
+    }
+    spinlock_release(&stealmem_lock);
+
+    return address;
 }
 
 /* Allocate/free some kernel-space virtual pages */
@@ -77,16 +157,37 @@ alloc_kpages(int npages)
 {
 	paddr_t pa;
 	pa = getppages(npages);
-	if (pa==0) {
+    if (pa == 0) {
 		return 0;
 	}
+
 	return PADDR_TO_KVADDR(pa);
 }
 
 void 
 free_kpages(vaddr_t addr)
 {
-	/* nothing - leak the memory. */
+    spinlock_acquire(&stealmem_lock);
+    if (coremap) {
+        if (!addr) {
+            spinlock_release(&stealmem_lock);
+            kprintf("Error during free_kpages");
+            return;
+        }
+        bool flag = false;
+        for (unsigned int i = 0; i <= frames; i++) {
+            if (coremap[i].address == addr) {
+                flag = true;
+            }
+            if (flag) {
+                coremap[i].unused = true;
+                if (!coremap[i].contiguous) {
+                    break;
+                }
+            }
+        }
+    }
+    spinlock_release(&stealmem_lock);
 
 	(void)addr;
 }
@@ -243,7 +344,10 @@ as_create(void)
 void
 as_destroy(struct addrspace *as)
 {
-	kfree(as);
+    free_kpages(as->as_pbase1);
+    free_kpages(as->as_pbase2);
+    free_kpages(as->as_stackpbase);
+    kfree(as);
 }
 
 void
@@ -291,12 +395,12 @@ as_define_region(struct addrspace *as, vaddr_t vaddr, size_t sz,
 
 	npages = sz / PAGE_SIZE;
 
-	/* We don't use these - all pages are read-write */
-	(void)readable;
-	(void)writeable;
-	(void)executable;
+	as->as_readable = readable != 0;
+    as->as_writeable = writeable != 0;
+    as->as_executable = executable != 0;
 
-	if (as->as_vbase1 == 0) {
+
+    if (as->as_vbase1 == 0) {
 		as->as_vbase1 = vaddr;
 		as->as_npages1 = npages;
 		return 0;
